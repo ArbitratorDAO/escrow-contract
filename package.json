@@ -1,0 +1,52 @@
+{
+  "name": "@josojo/token-Escrow",
+  "version": "0.1.1",
+  "description": "Smart contracts and migration scripts for the Escrow process",
+  "main": "truffle-config.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "networks-extract": "node scripts/extract_network_info.js",
+    "networks-inject": "node scripts/inject_network_info.js",
+    "networks-reset": "mkdir -p build/contracts && npx truffle networks --clean && npm run networks-inject",
+    "test": "truffle test",
+    "rpc": "ganache-cli -d",
+    "compile": "truffle compile",
+    "migrate": "truffle migrate",
+    "preversion": "npm run restore",
+    "restore": "rm -rf build && npm run compile",
+    "networks": "truffle networks",
+    "lint": "eslint ."
+  },
+  "keywords": [
+    "mediation",
+    "arbitration",
+    "escrow",
+    "smart-contract",
+    "ethereum"
+    ],
+  "license": "ISC",
+  "devDependencies": {
+    "solidity-coverage": "^0.5.11",
+    "@digix/tempo": "^0.2.0",
+    "@gnosis.pm/truffle-nice-tools": "^1.2.1",
+    "eslint": "^5.12.0",
+    "ganache-cli": "^6.2.5",
+    "truffle": "^5.0.2",
+    "truffle-flattener": "^1.2.10"
+  },
+  "dependencies": {
+    "@gnosis.pm/dx-contracts": "2.0.0",
+    "@gnosis.pm/gno-token": "2.0.0",
+    "@gnosis.pm/mock-contract": "^3.0.7",
+    "@gnosis.pm/util-contracts": "2.0.0",
+    "i": "^0.3.6",
+    "npm": "^6.7.0",
+    "chai": "^4.2.0",
+    "openzeppelin-solidity": "^2.1.2",
+    "truffle-assertions": "^0.7.2",
+    "truffle-contract": "^4.0.4",
+    "truffle-hdwallet-provider": "^1.0.2"
+  }
+}
