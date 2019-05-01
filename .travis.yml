@@ -1,0 +1,20 @@
+#.travis.yml
+sudo: required
+dist: trusty
+language: node_js
+node_js:
+  - '8'
+env:
+  global:
+before_install:
+  - rm -rf node_modules
+  - npm install -g ganache-cli@6.2.5
+install:
+  - npm install
+before_script:
+  - ganache-cli -d> /dev/null &
+  - sleep 5
+script:
+  - cd $TRAVIS_BUILD_DIR/travscripts
+  - "chmod +x ./BranchScript.sh && ./BranchScript.sh"
+  - cd $TRAVIS_BUILD_DIR
