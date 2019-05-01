@@ -5,35 +5,41 @@ import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "./Arbitrator.sol";
 import "./Verifier.sol";
-import "@daostack/arc/contracts/libs/SafeERC20.sol";
 
 
 contract EscrowContract is Verifier {
     using SafeMath for uint;
 
-    address public arbitrator;
-    uint maxJobFullfillment = 100000;
-    uint oneHundertPrecent = 105000;
+    event NewJobFulfillmentReport(bytes32 contractDetailHash, uint JobFulFilment);
+    event NewLegalContract(
+        bytes32 detailHash,
+        address payee,
+        address servicee,
+        bytes32 hashedInfo, 
+        uint depositAmount,
+        address depositToken,
+        uint timeout,
+        address arbitrator
+    );
+    event Log32(bytes32 prefixedHash);
+    event LogBytes(bytes data);
+    event LogAddress (address a);
 
-    enum States{
+    uint public maxJobFulfillment = 100000;
+    uint public maxJobFulfillmentPlusFee = 105000;
+
+    enum States {
+        NotExistant,
         InProgress,
         ResolutionProposalSubmitted,
         ArbitrationRequested,
         Arbitrated
     }
 
-    struct Contract{
+    struct Contract {
         States state;
-        ERC20 depositToken;
-        uint depositAmount;
-        address arbitrator;
-        address payee;
-        bool accepted;
-        address receipient;
-        bytes32 hashedInfo;
-        uint timeout;
-        uint jobFullfillment;
-        bool accepted;
+        uint jobFulfillment;
+        uint jobFulfillmentTimestamp;
         uint arbitrationRequestTimestamp;
     }
 
@@ -42,60 +48,162 @@ contract EscrowContract is Verifier {
     /**
      * Public interface
      */
-    function initiate_contract(
-        address receipient,
+    function initiateLegalContract(
         address payee,
-        ERC20 _depositToken, 
+        address servicee,
+        bytes32 hashedInfo, 
         uint depositAmount,
-        bytes32 signature,
-        bytes32 hashedInfo,
+        address depositToken,
         uint timeout,
+        address arbitrator,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) public
     {      
-        require(receipient != address(0), "Receipient must be specified");
-        bytes32 contractDetailHash = sha3(abi.encodePacked(payee, recepient, hashedInfo, depositAmount, _depositToken, timeout));
-        require(contracts[contractDetailHash].receipient != address(0),"Contract already exists");
-        contracts[contractDetailHash].payee = payee;
-        contracts[contractDetailHash].receipient = recepient;
-        contracts[contractDetailHash].depositToken = _depositToken;
-        contracts[contractDetailHash].depositAmount = depositAmount;
-        contracts[contractDetailHash].hashedInfo = hashedInfo;
-        contracts[contractDetailHash].timeout = timeout;
-        // verify signature of receipient
-        isSigned(_receipient, contractDetailHash, v, r, s);
+        require(payee != address(0), "Receipient must be specified");
+        bytes memory prefix = "\x19Ethereum Signed Message:\n32";
+        bytes32 contractDetailHash = keccak256(abi.encode(payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator));
+        bytes32 prefixedHash = keccak256(abi.encodePacked(prefix, contractDetailHash));
 
+        require(uint(contracts[contractDetailHash].state) == 0,"Contract already exists");
+
+        // verify signature of servicee
+        require(isSigned(servicee, prefixedHash, v, r, s),"Signature is incorrect");
         // store funds in contract
-        _depositToken.transferFrom(msg.sender, this, depositAmount);
+        require(ERC20(depositToken).transferFrom(msg.sender, address(this), depositAmount));
+
+        contracts[contractDetailHash].state = States.InProgress;
+        emit NewLegalContract(contractDetailHash, payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator);
     }
 
-    function reportJobFullfillment(uint id, uint jobFullFillment) public {
-        require(msg.sender == contracts[msg.sender][id].payee, "only the payee is allowed to send the jobFullFillment judgement");
-        require(jobFullFillment <= maxJobFullFillment, "jobFullFillment is not allowed to be bigger than the max value");
-        contracts[msg.sender][id].jobFullFillment = jobFullFillment;
-        contracts[msg.sender][id].jobFullFillmentTimestamp = jobFullFillmentTimestamp;
-
-        if(jobFullFillment == maxJobFullFillment){
-            contracts[msg.sender][id].depositToken.transfer(contracts[msg.sender][id].receipient, contracts[hash].depositAmount.mul(maxJobFullFillment)/oneHundertPrecent);
-            contracts[msg.sender][id].depositToken.transfer(contracts[msg.sender][id].payee, contracts[hash].depositAmount.mul(oneHundertPrecent.sub(maxJobFullFillment))/oneHundertPrecent);
-            delete contracts[msg.sender][id];
+    function reportJobFulfillment(uint jobFulfillment, bytes memory data) public {
+        bytes32 contractDetailHash = keccak256(data);
+        require(contracts[contractDetailHash].state != States.NotExistant, "contract must exist");
+        address payee = getPayee(data);
+        require(msg.sender == payee, "only the payee is allowed to send the jobFulfillment judgement");
+        require(jobFulfillment <= maxJobFulfillment, "jobFulfillment is not allowed to be bigger than the max value");
+        
+        if (jobFulfillment == maxJobFulfillment) {
+            _makepayout(contractDetailHash, jobFulfillment, data);
+            delete contracts[contractDetailHash];
+        } else {
+            contracts[contractDetailHash].state = States.ResolutionProposalSubmitted;
+            contracts[contractDetailHash].jobFulfillment = jobFulfillment;
+            contracts[contractDetailHash].jobFulfillmentTimestamp = now;
         }
+        emit NewJobFulfillmentReport(contractDetailHash, jobFulfillment);
     }
     
-    function escalatedToArbitrator(address payee, uint id) public {
-
+    function escalateToArbitrator(bytes memory data) public {
+        bytes32 contractDetailHash = keccak256(data);
+        require(contracts[contractDetailHash].state != States.NotExistant, "contract must exist");
+        address arbitrator = getArbitrator(data);
+        address servicee = getServicee(data);
+        uint timeout = getTimeout(data);
+        require(servicee == msg.sender, "sender is not the servicee");
+        require(timeout < now || contracts[contractDetailHash].state == States.ResolutionProposalSubmitted, 
+            "contract not yet allowed to be arbitrated");
+        contracts[contractDetailHash].state = States.ArbitrationRequested;
+        Arbitrator(arbitrator).arbitrationRequest(contractDetailHash);
     }
-    
-    function requestForJobFullfillmentGrade(uint id, address sender) public {
 
+    function submitArbitrationDecision(uint jobFulfillment, bytes memory data) public {
+        bytes32 contractDetailHash = keccak256(data);
+        require(States.ArbitrationRequested == contracts[contractDetailHash].state, "State of contract must be ArbitrationRequest");
+        address arbitrator = getArbitrator(data);
+        require(msg.sender == arbitrator, "only arbitrator can submit arbitration");
+        
+        _makepayout(contractDetailHash, jobFulfillment, data);
+    }
+
+    function triggerPayout(bytes32 contractDetailHash, bytes memory data) public {
+        require(contracts[contractDetailHash].jobFulfillmentTimestamp + 7 days < now,"not yet ready for payout");
+        require(contracts[contractDetailHash].state == States.ResolutionProposalSubmitted, "contract was escalted to judges");
+        
+        _makepayout(contractDetailHash, contracts[contractDetailHash].jobFulfillment, data);
     }
      /**
-     * Public View Functions
+     * Public pure Functions
      */
     
     /**
      * Internal Helpers
      */
+     function _makepayout(bytes32 contractDetailHash, uint jobFulfillment, bytes memory data) internal {
+        require(contractDetailHash ==keccak256(data), "info bytes are not matching with contractDetailHash");
+
+        address depositToken = getDepositToken(data);
+        address payee = getPayee(data);
+        address servicee = getServicee(data);
+
+        uint depositAmount = getDepositAmount(data); 
+        ERC20(depositToken).transfer(servicee, depositAmount.mul(jobFulfillment)/maxJobFulfillmentPlusFee);
+        ERC20(depositToken).transfer(payee, depositAmount.mul(maxJobFulfillmentPlusFee.sub(jobFulfillment))/maxJobFulfillmentPlusFee);
+        delete contracts[contractDetailHash];
+     }
+
+     function getPayee(bytes memory data) public pure returns(address payee){
+        address servicee;
+        bytes32 hashedInfo; 
+        uint depositAmount;
+        address depositToken;
+        uint timeout;
+        address arbitrator;
+        (payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator) = 
+        abi.decode(data, (address, address, bytes32, uint, address, uint, address));
+    }
+    function getServicee(bytes memory data) public pure returns(address servicee){
+        address payee;
+        bytes32 hashedInfo; 
+        uint depositAmount;
+        address depositToken;
+        uint timeout;
+        address arbitrator;
+        (payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator) = 
+        abi.decode(data, (address, address, bytes32, uint, address, uint, address));
+    }
+    function getDepositAmount(bytes memory data) public pure returns(uint depositAmount){
+        address payee;
+        bytes32 hashedInfo;
+        address servicee; 
+        address depositToken;
+        uint timeout;
+        address arbitrator;
+        (payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator) = 
+        abi.decode(data, (address, address, bytes32, uint, address, uint, address));
+    }
+    function getDepositToken(bytes memory data) public pure returns(address depositToken){
+        address payee;
+        bytes32 hashedInfo;
+        address servicee; 
+        uint depositAmount;
+        uint timeout;
+        address arbitrator;
+        (payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator) = 
+        abi.decode(data, (address, address, bytes32, uint, address, uint, address));
+    }
+    function getTimeout(bytes memory data) public pure returns(uint timeout){
+        address payee;
+        bytes32 hashedInfo;
+        address servicee; 
+        uint depositAmount;
+        address depositToken;
+        address arbitrator;
+        (payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator) = 
+        abi.decode(data, (address, address, bytes32, uint, address, uint, address));
+    }
+    function getArbitrator(bytes memory data) public pure returns(address arbitrator){
+        address payee;
+        bytes32 hashedInfo;
+        address servicee; 
+        uint depositAmount;
+        address depositToken;
+        uint timeout;
+        (payee, servicee, hashedInfo, depositAmount, depositToken, timeout, arbitrator) = 
+        abi.decode(data, (address, address, bytes32, uint, address, uint, address));
+    }
+    function getState(bytes32 hash) public view returns (uint){
+        return uint(contracts[hash].state);
+    }
 }

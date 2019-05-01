@@ -1,14 +1,9 @@
-const { sha256 } = require("ethereumjs-util")
-const memoize = require("fast-memoize")
-const MerkleTree = require("merkletreejs")
-
-
-const timestamp = async (web3, block = "latest") => {
+const timestamp = async (block = "latest") => {
   const b = await web3.eth.getBlock(block)
   return b.timestamp
 }
 
-const increaseTimeBy = async (seconds, web3=web3) => {
+const increaseTimeBy = async (seconds) => {
   if (seconds < 0) {
     throw new Error("Can\"t decrease time in testrpc")
   }
@@ -61,25 +56,7 @@ const assertRejects = async (q, msg) => {
   }
 }
 
-/**
- * depoloys tokens, funds opens accounts, approves contract for transfer and opens accounts 
- * The object consists of:
- * 1.) BatchAuction Contract
- * 2.) desired token owner (ideally not contract owner)
- * 3.) accounts to be funded and registered
- * 4.) number of tokens to be registered
- * @returns {Array} tokens
- */
-const contractInitiation = async function(<, contract, token_owner, accounts, numTokens) {
-  const tokens = await registerTokens(token_artifact, contract, token_owner, numTokens)
-  const amount = "100000000000000000000"
-  for (let i = 0; i < tokens.length; i++) {openAccounts
-    await fundAccounts(token_owner, accounts, tokens[i], amount)
-    await approveContract(contract, accounts, tokens[i], amount)
-  }
-  await openAccounts(contract, accounts)
-  return tokens
-}
+
 
 // Wait for n blocks to pass
 const waitForNBlocks = async function(numBlocks, authority, web3Provider=web3) {
@@ -99,7 +76,6 @@ const toHex = function(buffer) {
 module.exports = {
   assertRejects,
   waitForNBlocks,
-  contractInitiation, 
   toHex,
   increaseTimeBy,
   timestamp,
