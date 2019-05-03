@@ -24,6 +24,8 @@ contract EscrowContract is Verifier {
     event Log32(bytes32 prefixedHash);
     event LogBytes(bytes data);
     event LogAddress (address a);
+    event Transfer (address to, uint amount);
+
 
     uint public maxJobFulfillment = 100000;
     uint public maxJobFulfillmentPlusFee = 105000;
@@ -85,8 +87,7 @@ contract EscrowContract is Verifier {
         require(jobFulfillment <= maxJobFulfillment, "jobFulfillment is not allowed to be bigger than the max value");
         
         if (jobFulfillment == maxJobFulfillment) {
-            _makepayout(contractDetailHash, jobFulfillment, data);
-            delete contracts[contractDetailHash];
+            _makepayoutRegular(contractDetailHash, jobFulfillment, data);
         } else {
             contracts[contractDetailHash].state = States.ResolutionProposalSubmitted;
             contracts[contractDetailHash].jobFulfillment = jobFulfillment;
@@ -113,15 +114,14 @@ contract EscrowContract is Verifier {
         require(States.ArbitrationRequested == contracts[contractDetailHash].state, "State of contract must be ArbitrationRequest");
         address arbitrator = getArbitrator(data);
         require(msg.sender == arbitrator, "only arbitrator can submit arbitration");
-        
-        _makepayout(contractDetailHash, jobFulfillment, data);
+        _makepayoutWithArbitrationFee(contractDetailHash, jobFulfillment, data);
     }
 
     function triggerPayout(bytes32 contractDetailHash, bytes memory data) public {
         require(contracts[contractDetailHash].jobFulfillmentTimestamp + 7 days < now,"not yet ready for payout");
         require(contracts[contractDetailHash].state == States.ResolutionProposalSubmitted, "contract was escalted to judges");
-        
-        _makepayout(contractDetailHash, contracts[contractDetailHash].jobFulfillment, data);
+    
+        _makepayoutRegular(contractDetailHash, contracts[contractDetailHash].jobFulfillment, data);
     }
      /**
      * Public pure Functions
@@ -130,16 +130,30 @@ contract EscrowContract is Verifier {
     /**
      * Internal Helpers
      */
-     function _makepayout(bytes32 contractDetailHash, uint jobFulfillment, bytes memory data) internal {
+     function _makepayoutWithArbitrationFee(bytes32 contractDetailHash, uint jobFulfillment, bytes memory data) internal {
+        uint depositAmount = getDepositAmount(data); 
+        uint serviceePayout = depositAmount.mul(jobFulfillment)/maxJobFulfillmentPlusFee;
+        uint payeePayout = depositAmount.mul(maxJobFulfillment.sub(jobFulfillment))/maxJobFulfillmentPlusFee;
+        uint arbitratorPayout = depositAmount.mul(maxJobFulfillmentPlusFee.sub(maxJobFulfillment))/maxJobFulfillmentPlusFee;
+
+        _makepayout(contractDetailHash, serviceePayout, payeePayout,arbitratorPayout, data);
+     }
+    function _makepayoutRegular(bytes32 contractDetailHash, uint jobFulfillment, bytes memory data) internal {
+        uint depositAmount = getDepositAmount(data); 
+        uint serviceePayout = depositAmount.mul(jobFulfillment)/maxJobFulfillmentPlusFee;
+        uint payeePayout = depositAmount.mul(maxJobFulfillmentPlusFee.sub(jobFulfillment))/maxJobFulfillmentPlusFee;
+        uint arbitratorPayout = 0;
+        _makepayout(contractDetailHash, serviceePayout, payeePayout,arbitratorPayout, data);
+     }
+    
+    function _makepayout(bytes32 contractDetailHash, uint serviceePayout, uint payeePayout, uint arbitratorPayout, bytes memory data) internal {
         require(contractDetailHash ==keccak256(data), "info bytes are not matching with contractDetailHash");
 
         address depositToken = getDepositToken(data);
         address payee = getPayee(data);
         address servicee = getServicee(data);
-
-        uint depositAmount = getDepositAmount(data); 
-        ERC20(depositToken).transfer(servicee, depositAmount.mul(jobFulfillment)/maxJobFulfillmentPlusFee);
-        ERC20(depositToken).transfer(payee, depositAmount.mul(maxJobFulfillmentPlusFee.sub(jobFulfillment))/maxJobFulfillmentPlusFee);
+        ERC20(depositToken).transfer(servicee, serviceePayout);
+        ERC20(depositToken).transfer(payee, payeePayout);
         delete contracts[contractDetailHash];
      }
 
